@@ -10,6 +10,7 @@
 local rules = require 'wrap.rules'
 local temp = require 'utils' -- TODO: Temporary, delete
 local utils = require 'wrap.utils'
+local classes = require 'wrap.classes'
 local p = temp.pprint
 
 local M = {}
