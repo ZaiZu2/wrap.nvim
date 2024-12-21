@@ -3,26 +3,25 @@
 -- TODO: Recognize strings comments and allow for their formatting (python)
 -- FIXME: Lua comments act weirdly:
 -- E.g. this:
--- Comment with unusual spacing between lines
+-- Comment with unusual spacing between line
 --
 --
 -- This is an example with blank lines in between
+local rules = require 'wrap.rules'
+local temp = require 'utils' -- TODO: Temporary, delete
+local utils = require 'wrap.utils'
+local p = temp.pprint
 
-M = {}
+local M = {}
 
 local _config = {
-    line_width = 80,
+    line_width = 40,
 }
-
-local utils = require 'wrap.utils'
-local rules = require 'wrap.rules'
-
-local temp = require 'utils' -- TODO: Temporary, delete
-local p = temp.pprint
 
 local tr = vim.treesitter
 
 function M.setup(config)
+    config = config or {}
     _config = vim.tbl_deep_extend('force', _config, config)
 end
 
@@ -170,13 +169,11 @@ end
 ---@return string comment_symbol Opening character/s denoting a comment
 local function parse_singleline(com_text)
     local single_symbols = utils.get_comment_symbol('single', vim.bo.filetype, rules)
-    -- p { single_symbols = single_symbols}
     if single_symbols ~= nil then
         -- Some languages have multiple symbols denoting a single-line comment
         for _, symbol in ipairs(single_symbols) do
             local prefix_rgx = '^%s*' .. utils.escape(symbol) -- Match opening symbol
             local body_rgx = '%s*(.-)%s*$' -- Match comment content, but strip all outer whitespaces
-            -- p { com_text = com_text, symbol = symbol,  }
             local com_body = string.match(com_text, prefix_rgx .. body_rgx)
             if com_body ~= nil then
                 return com_body, symbol
@@ -214,6 +211,7 @@ function M.wrap_comment()
     -- Try parsing as a multiline comment
     local success, com_body, com_symbol = pcall(parse_multiline, init_text)
     local left, right
+    local string_length, wrapped_lines, buffer_lines = nil, nil, {}
     if success then
         com_type = 'multi'
 
@@ -229,35 +227,7 @@ function M.wrap_comment()
         end
         local paragraph_lines = table.move(com_lines, left, right, 1, {})
         com_text = table.concat(paragraph_lines, ' ')
-    else -- Multiline didn't match, must be single-line
-        com_type = 'single'
-        -- Find all row-adjacent comment nodes
-        comment_nodes = find_adjacent_nodes(init_node, bufnr)
-        -- Extract node texts
-        com_lines = {}
-        for _, node in ipairs(comment_nodes) do
-            local line = tr.get_node_text(node, bufnr)
-            com_body, com_symbol = parse_singleline(line)
-            table.insert(com_lines, com_body)
-        end
-        com_text = table.concat(com_lines, ' ')
-    end
 
-    local string_length, wrapped_lines, buffer_lines = nil, nil, {}
-    if com_type == 'single' then
-        -- Set comment length based on the current indentation
-        string_length = _config.line_width - init_col_start - #(com_symbol .. ' ')
-        wrapped_lines = wrap_string(com_text, string_length)
-        local indent = string.rep(' ', init_col_start)
-        for i, line in ipairs(wrapped_lines) do
-            buffer_lines[i] = indent .. com_symbol .. ' ' .. line
-        end
-        -- Replace buffer lines
-        local rstart, _, _, _ = tr.get_node_range(comment_nodes[1])
-        local _, _, rend, _ = tr.get_node_range(comment_nodes[#comment_nodes])
-        vim.api.nvim_buf_set_lines(bufnr, rstart, rend + 1, true, buffer_lines)
-        vim.api.nvim_win_set_cursor(cur_win, { rstart + 1, cur_x })
-    elseif com_type == 'multi' then
         string_length = _config.line_width - init_col_start
         wrapped_lines = wrap_string(com_text, string_length)
 
@@ -292,8 +262,35 @@ function M.wrap_comment()
         -- Replace buffer lines
         local rstart, rend = init_row_start, init_row_end
         vim.api.nvim_buf_set_lines(bufnr, rstart, rend + 1, true, buffer_lines)
-        vim.api.nvim_win_set_cursor(cur_win, { rstart + 1, cur_x })
+        -- vim.api.nvim_win_set_cursor(cur_win, { rstart + 1, cur_x })
+    else -- Multiline didn't match, must be single-line
+        com_type = 'single'
+        -- Find all row-adjacent comment nodes
+        comment_nodes = find_adjacent_nodes(init_node, bufnr)
+        -- Extract node texts
+        com_lines = {}
+        for _, node in ipairs(comment_nodes) do
+            local line = tr.get_node_text(node, bufnr)
+            com_body, com_symbol = parse_singleline(line)
+            table.insert(com_lines, com_body)
+        end
+        com_text = table.concat(com_lines, ' ')
+
+        -- Set comment length based on the current indentation
+        string_length = _config.line_width - init_col_start - #(com_symbol .. ' ')
+        wrapped_lines = wrap_string(com_text, string_length)
+        local indent = string.rep(' ', init_col_start)
+        for i, line in ipairs(wrapped_lines) do
+            buffer_lines[i] = indent .. com_symbol .. ' ' .. line
+        end
+        -- Replace buffer lines
+        local rstart, _, _, _ = tr.get_node_range(comment_nodes[1])
+        local _, _, rend, _ = tr.get_node_range(comment_nodes[#comment_nodes])
+        vim.api.nvim_buf_set_lines(bufnr, rstart, rend + 1, true, buffer_lines)
+        -- vim.api.nvim_win_set_cursor(cur_win, { rstart + 1, cur_x })
     end
 end
+
+-- vim.keymap.set('n', '<leader>F', M.wrap_comment, { desc = '[F]ormat comment string' })
 
 return M
