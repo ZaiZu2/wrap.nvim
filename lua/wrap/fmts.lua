@@ -1,26 +1,33 @@
+M = {}
+
 local rules = require 'wrap.rules'
+local temp = require 'utils' -- TODO: Temporary, delete
 local tr = require 'vim.treesitter'
 local utils = require 'wrap.utils'
+local p = temp.pprint
 
-MultiFormatter = {}
+local MultiFormatter = { a = 'a' }
 
-function MultiFormatter:new(node, cur_pos, filetype)
-    local row_start, col_start, init_row_end, _ = tr.get_node_range(node)
+function MultiFormatter:new(line_length, node, cur_pos, filetype)
+    local row_start, col_start, _, _ = tr.get_node_range(node)
+    local com_length = line_length - col_start
     local new = {
+        line_length = line_length,
+        com_length = com_length,
         row_start = row_start,
         col_start = col_start,
         node = node,
         cur_pos = cur_pos,
-        com_type = 'multi',
         filetype = filetype,
         symbols = utils.get_comment_symbol('multi', filetype, rules),
     }
-    self.__index = self
     setmetatable(new, self)
+    self.__index = self -- Provides inheritence
+
     return new
 end
 
-function MultiFormatter:parse(text)
+function MultiFormatter.parse(self, text)
     local com_text
     -- Parse comment content out of a raw string
     if self.symbols ~= nil then
@@ -50,7 +57,7 @@ end
 function MultiFormatter:isolate_paragraph(com_lines)
     local left, right
     -- Find and isolate a paragraph
-    local rel_cur_y = self.cur_pos[1] - self.row_start + 1
+    local rel_cur_y = self.cur_pos[2] - self.row_start + 1
     left, right = utils.find_subarray(com_lines, rel_cur_y, function(str)
         return not utils.is_whitespace_only(str)
     end)
@@ -58,15 +65,21 @@ function MultiFormatter:isolate_paragraph(com_lines)
         vim.notify 'Selected line consists only of whitespaces'
         return
     end
-    return table.move(com_lines, left, right, 1, {})
+    return table.move(com_lines, left, right, 1, {}), left, right
 end
 
-function MultiFormatter:wrap(com_text, line_length)
+function MultiFormatter:merge_paragraph(com_lines, paragraph_lines, left, right)
+    local merged_lines = vim.list_slice(com_lines, 1, left - 1)
+    local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
+    vim.list_extend(merged_lines, paragraph_lines)
+    vim.list_extend(merged_lines, end_slice)
+    return merged_lines
+end
+
+function MultiFormatter:wrap(com_text)
     local wrapped_lines, _ = {}, nil
-    --- @type integer|nil
-    local com_split_end = 1
-    --- @type integer|nil
-    local com_split_start = 0
+    local com_split_end = 1 --- @type integer|nil
+    local com_split_start = 0 --- @type integer|nil
 
     local is_final_substr = false
     -- Iterate over `comment`, cutting chunks out of it and building lines out of it
@@ -83,11 +96,11 @@ function MultiFormatter:wrap(com_text, line_length)
         -- Find limits of a new line, accounting for comment length available left
         local line_start = com_split_start
         local line_end
-        if line_start + line_length > #com_text then
+        if line_start + self.com_length > #com_text then
             line_end = #com_text
             is_final_substr = true
         else
-            line_end = line_start + line_length
+            line_end = line_start + self.com_length
         end
 
         -- Substring a new line
@@ -97,7 +110,7 @@ function MultiFormatter:wrap(com_text, line_length)
             -- If it does, find the closest whitespace to the left of that word
             com_split_end, _ = string.find(substring, '%s*%S*$')
             if com_split_end == nil then -- Text occupies a full line width
-                com_split_end = line_length
+                com_split_end = self.com_length
             -- TODO: Line might consist of only whitespaces (?), this is not handled here
             else
                 com_split_end = com_split_end - 1
@@ -110,9 +123,15 @@ function MultiFormatter:wrap(com_text, line_length)
     return wrapped_lines
 end
 
-function MultiFormatter:build_buffer_lines(lines)
-    local buffer_lines
-    local indent = string.rep(' ', self.init_col_start)
+function MultiFormatter:build_buf_lines(lines)
+    -- TODO: Figure out some automatic inferrence of indentation
+    -- local indent_symbol = vim.bo.expandtab and '\t' or ' '
+    -- local shiftwidth = vim.fn.shiftwidth()
+    -- local indents_no = math.floor(self.col_start / vim.fn.shiftwidth()) + 1
+    -- local indent = indent_symbol:rep(shiftwidth * indents_no)
+
+    local buffer_lines = {}
+    local indent = string.rep(' ', self.col_start)
     for i, line in ipairs(lines) do
         local buffer_line, space
         space = utils.is_whitespace_only(line) and '' or ' ' -- Ternary expr alternative
@@ -127,9 +146,12 @@ function MultiFormatter:build_buffer_lines(lines)
         end
         table.insert(buffer_lines, buffer_line)
     end
+    return buffer_lines
 end
 
-SingleFormatter = {}
+-----------------------------------------------------------------------------------------
+
+local SingleFormatter = {}
 
 function SingleFormatter:new()
     local new = {}
@@ -145,3 +167,8 @@ function SingleFormatter:find_adjacent_nodes(node, bufnr) end
 function SingleFormatter:wrap(com_text, length) end
 
 function SingleFormatter:build_buffer_lines(lines) end
+
+return {
+    MultiFormatter = MultiFormatter,
+    SingleFormatter = SingleFormatter,
+}
