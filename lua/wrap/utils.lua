@@ -10,6 +10,23 @@ function M.escape(str)
     return escaped
 end
 
+--- Get the indentation character and level based on the given indent length.
+---@param indent_length number: Length of the indentation.
+---@return string, number: Character used for indentation and the indentation level.
+function M.calculate_indent(indent_length)
+    local indent_lvl, indent_char
+    local shiftwidth = vim.bo.shiftwidth
+    if vim.bo.expandtab then
+        indent_lvl = indent_length / shiftwidth
+        indent_char = (' '):rep(shiftwidth)
+    else
+        indent_lvl = indent_length / vim.bo.tabstop
+        indent_char = '\t'
+    end
+    indent_lvl = math.floor(indent_lvl)
+    return indent_char, indent_lvl
+end
+
 ---Check if the string consist of whitespaces only
 ---@param str string
 ---@return boolean
