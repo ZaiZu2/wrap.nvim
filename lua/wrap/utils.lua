@@ -58,7 +58,6 @@ function M.find_subarray(array, index, predicate)
     if index < 1 or index > #array then
         error 'Index out of bounds'
     end
-    p { array = array, index = index, result = not predicate(array[index]) }
     if not predicate(array[index]) then
         return -1, -1
     end
@@ -90,6 +89,22 @@ function M.get_comment_symbol(com_type, ft, rules)
         return nil
     end
     return ft_rules[com_type]
+end
+
+---Concatenates non-whitespace-only lines into a single string, separated by spaces.
+---@param lines table: A array containing lines of text.
+---@return string: A single string with non-whitespace-only lines concatenated, separated by spaces.
+function M.concatenate_lines(lines)
+    local com_text = ''
+    for _, line in ipairs(lines) do
+        if not M.is_whitespace_only(line) then
+            com_text = com_text .. line .. ' '
+        end
+    end
+    if #com_text > 0 then
+        com_text = com_text:sub(1, -2) -- Remove the last character (trailing space)
+    end
+    return com_text
 end
 
 -- FIXME: UNUSED
