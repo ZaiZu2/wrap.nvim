@@ -1,17 +1,32 @@
-M = {}
-
-local rules = require 'wrap.rules'
 local temp = require 'utils' -- TODO: Temporary, delete
 local tr = require 'vim.treesitter'
 local utils = require 'wrap.utils'
 local p = temp.pprint
 
-local Formatter = {} -- Inherit from Formatter
-function Formatter:new(symbols, filetype)
+---@class Formatter
+---@field tokens table
+---@field matched_token [string, string?]|nil
+---@field filetype string
+---@field bufnr number
+---@field init_node TSNode
+---@field init_node_range [number, number, number, number]
+---@field rel_cur_y number|nil
+
+---@class FormatterOpts
+---@field tokens table
+---@field filetype string
+---@field bufnr number
+---@field init_node TSNode
+---@field cur_y number
+
+---@class Formatter
+local Formatter = {}
+---@return Formatter
+function Formatter:new()
     self.__index = self -- Provides inheritence
-    local new = { symbols = symbols, matched_symbol = nil, filetype = filetype }
-    setmetatable(new, self)
-    return new
+    local obj = {}
+    setmetatable(obj, self)
+    return obj
 end
 
 function Formatter:wrap(com_text, com_length)
@@ -73,81 +88,58 @@ function Formatter:isolate_paragraph(com_lines, index)
     return table.move(com_lines, left, right, 1, {}), left, right
 end
 
-function Formatter:merge_paragraph(com_lines, paragraph_lines, left, right)
+function Formatter:merge_paragraph(com_lines, lead_wtspcs, paragraph_lines, left, right)
     local merged_lines = vim.list_slice(com_lines, 1, left - 1)
     local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
     vim.list_extend(merged_lines, paragraph_lines)
     vim.list_extend(merged_lines, end_slice)
-    return merged_lines
+
+    -- Extend whitespace list to retain correct line to whitespace association
+    local paragraph_wtspcs = {}
+    for _ = 1, #paragraph_lines do
+        table.insert(paragraph_wtspcs, lead_wtspcs[self.rel_cur_y])
+    end
+    local merged_wtspcs = vim.list_slice(lead_wtspcs, 1, left - 1)
+    local end_wtsp_slice = vim.list_slice(lead_wtspcs, right + 1, #lead_wtspcs)
+    vim.list_extend(merged_wtspcs, paragraph_wtspcs)
+    vim.list_extend(merged_wtspcs, end_wtsp_slice)
+
+    return merged_lines, merged_wtspcs
 end
 
 -----------------------------------------------------------------------------------------
 
-local CustomFormatter = {}
-function CustomFormatter:new(symbols, filetype)
-    self.__index = self
-    setmetatable(self, { __index = Formatter })
-
-    local new = Formatter:new(symbols, filetype)
-    setmetatable(new, self)
-    return new
-end
-
-function CustomFormatter:parse(text)
-    text = text .. '\n' -- Needed for capturing last line
-    p { text = text }
-    local com_lines = {}
-    for line in text:gmatch '(.-)\n' do -- Match groups separated by \n (split string)
-        local trimmed_line = string.match(line, '^%s*(.-)%s*$')
-        table.insert(com_lines, trimmed_line)
-    end
-    return com_lines
-end
-
-function CustomFormatter:build_buf_lines(lines, col_start)
-    local indent_char, indent_lvl = utils.calculate_indent(col_start)
-    local indent = string.rep(indent_char, indent_lvl)
-
-    local buffer_lines = {}
-    for i, line in ipairs(lines) do
-        local buffer_line, space
-        space = utils.is_whitespace_only(line) and '' or ' ' -- Ternary expr alternative
-        if #lines == 1 then -- If comment spans only 1 line
-            buffer_line = line
-        elseif i == 1 then -- If first line
-            buffer_line = line
-        elseif i == #lines then -- If last line
-            buffer_line = line
-        else -- If a generic line
-            buffer_line = indent .. line
-        end
-        table.insert(buffer_lines, buffer_line)
-    end
-    return buffer_lines
-end
-
------------------------------------------------------------------------------------------
-
+---@class MultiFormatter:Formatter
 local MultiFormatter = {}
-function MultiFormatter:new(symbols, filetype)
+
+---@param opts FormatterOpts
+---@return MultiFormatter
+function MultiFormatter:new(opts)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local new = Formatter:new(symbols, filetype)
-    setmetatable(new, self)
-    return new
+    local obj = Formatter:new()
+    obj.tokens = opts.tokens
+    obj.matched_token = nil
+    obj.filetype = opts.filetype
+    obj.bufnr = opts.bufnr
+    obj.init_node = opts.init_node
+    obj.init_node_range = { tr.get_node_range(obj.init_node) }
+    obj.rel_cur_y = opts.cur_y - obj.init_node_range[1] + 1
+    setmetatable(obj, self)
+    return obj ---@type MultiFormatter
 end
 
 function MultiFormatter:parse(text)
     local com_text
-    for _, symbol in ipairs(self.symbols) do
+    for _, token in ipairs(self.tokens) do
         -- Parse comment content out of a raw string
-        local prefix_rgx = '^%s*' .. utils.escape(symbol[1]) -- Match opening symbol
+        local prefix_rgx = '^%s*' .. utils.escape(token[1]) -- Match opening token
         local body_rgx = '(.*)' -- Match comment content with all whitespaces and newline chars
-        local suffix_rgx = utils.escape(symbol[2]) .. '%s*$' -- Match closing symbol
+        local suffix_rgx = utils.escape(token[2]) .. '%s*$' -- Match closing token
         com_text = string.match(text, prefix_rgx .. body_rgx .. suffix_rgx)
         if com_text ~= nil then
-            self.matched_symbol = symbol
+            self.matched_token = token
             break
         end
     end
@@ -161,35 +153,48 @@ function MultiFormatter:parse(text)
     -- Split comment content into lines
     com_text = com_text .. '\n' -- Needed for capturing last line
     local com_lines = {}
+    local lead_wtspcs = {}
     for line in com_text:gmatch '(.-)\n' do -- Match groups separated by \n (split string)
-        local trimmed_line = string.match(line, '^%s*(.-)%s*$')
+        local lead_wtspc, trimmed_line = string.match(line, '^(%s*)(.-)%s*$')
         table.insert(com_lines, trimmed_line)
+        table.insert(lead_wtspcs, lead_wtspc or '')
     end
-    return com_lines
+    return com_lines, lead_wtspcs
 end
 
-function MultiFormatter:build_buf_lines(lines, col_start)
-    local indent_char, indent_lvl = utils.calculate_indent(col_start)
+function MultiFormatter:build_buf_whole(lines)
+    local indent_char, indent_lvl = utils.calculate_indent(self.init_node_range[2])
     local indent = string.rep(indent_char, indent_lvl)
 
     local buffer_lines = {}
     for i, line in ipairs(lines) do
-        local buffer_line, space
-        p { matched_symbol = self.matched_symbol }
-        space = utils.is_whitespace_only(line) and '' or ' ' -- Ternary expr alternative
+        local buffer_line
         if #lines == 1 then -- If comment spans only 1 line
-            buffer_line = indent
-                .. self.matched_symbol[1]
-                .. space
-                .. line
-                .. space
-                .. self.matched_symbol[2]
+            buffer_line = self.matched_token[1] .. line .. self.matched_token[2]
         elseif i == 1 then -- If first line
-            buffer_line = indent .. self.matched_symbol[1] .. space .. line
+            buffer_line = self.matched_token[1] .. line
         elseif i == #lines then -- If last line
-            buffer_line = indent .. line .. space .. self.matched_symbol[2]
+            buffer_line = indent .. line .. self.matched_token[2]
         else -- If a generic line
-            buffer_line = indent .. line
+            buffer_line = utils.is_whitespace_only(line) and '' or indent .. line
+        end
+        table.insert(buffer_lines, buffer_line)
+    end
+    return buffer_lines
+end
+
+function MultiFormatter:build_buf_paragraph(lines, lead_wtspcs)
+    local buffer_lines = {}
+    for i, line in ipairs(lines) do
+        local buffer_line
+        if #lines == 1 then -- If comment spans only 1 line
+            buffer_line = self.matched_token[1] .. line .. self.matched_token[2]
+        elseif i == 1 then -- If first line
+            buffer_line = self.matched_token[1] .. line
+        elseif i == #lines then -- If last line
+            buffer_line = lead_wtspcs[i] .. line .. self.matched_token[2]
+        else -- If a generic line
+            buffer_line = utils.is_whitespace_only(line) and '' or lead_wtspcs[i] .. line
         end
         table.insert(buffer_lines, buffer_line)
     end
@@ -198,26 +203,37 @@ end
 
 -----------------------------------------------------------------------------------------
 
+---@class SingleFormatter:Formatter
+---@field cur_y number
 local SingleFormatter = {}
-function SingleFormatter:new(symbols, filetype)
+
+--- @param opts FormatterOpts
+--- @return SingleFormatter
+function SingleFormatter:new(opts)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local new = Formatter:new(symbols, filetype)
-    setmetatable(new, self)
-    return new
+    local obj = Formatter:new()
+    obj.tokens = opts.tokens
+    obj.matched_token = nil
+    obj.filetype = opts.filetype
+    obj.bufnr = opts.bufnr
+    obj.init_node = opts.init_node
+    obj.init_node_range = { tr.get_node_range(obj.init_node) }
+    obj.cur_y = opts.cur_y
+    setmetatable(obj, self)
+    return obj ---@type SingleFormatter
 end
 
 function SingleFormatter:parse(com_text)
     local com_body
-    p {single_symbols = self.symbols}
-    for _, symbol in ipairs(self.symbols) do
-        local prefix_rgx = '^%s*' .. utils.escape(symbol[1]) -- Match opening symbol
+    for _, token in ipairs(self.tokens) do
+        local prefix_rgx = '^%s*' .. utils.escape(token[1]) -- Match opening token
         local body_rgx = '%s*(.-)%s*$' -- Match comment content, but strip all outer whitespaces
         com_body = string.match(com_text, prefix_rgx .. body_rgx)
 
         if com_body ~= nil then
-            self.matched_symbol = symbol
+            self.matched_token = token
             return com_body
         end
     end
@@ -240,10 +256,10 @@ function SingleFormatter:parse(com_text)
     end
 end
 
-function SingleFormatter:parse_block(com_nodes, bufnr)
+function SingleFormatter:parse_block(com_nodes)
     local com_lines = {}
     for _, node in ipairs(com_nodes) do
-        local com_text = tr.get_node_text(node, bufnr)
+        local com_text = tr.get_node_text(node, self.bufnr)
         local com_line = self:parse(com_text)
         -- TODO: Add error handling to `parse`
         table.insert(com_lines, com_line)
@@ -291,13 +307,31 @@ function SingleFormatter:find_adjacent_nodes(node)
     return found_nodes
 end
 
-function SingleFormatter:build_buf_lines(lines, col_start)
-    local indent_char, indent_lvl = utils.calculate_indent(col_start)
+function SingleFormatter:build_buf_lines(lines, start_node)
+    -- First line must be merged from the existing one in case of an inline comment.
+    -- Final comment indentation depends on the selected line, hence newly
+    -- wrapped lines might overwrite the commented code.
+    local first_row_start, first_col_start, _, _ = tr.get_node_range(start_node)
+    local new_col_start = self.init_node_range[2]
+
+    local indent_char, indent_lvl = utils.calculate_indent(new_col_start)
     local indent = string.rep(indent_char, indent_lvl)
 
+    local start_line = vim.api.nvim_buf_get_text(self.bufnr, first_row_start, 0, first_row_start, first_col_start, {})[1]
+    -- Calculate the final offset of the first comment line in reference to potential code
+    local col_start_diff = new_col_start - first_col_start
+    local inline_code
+    if col_start_diff > 0 then
+        inline_code = start_line .. string.rep(' ', col_start_diff)
+    else
+        inline_code = start_line:sub(1, new_col_start - 1)
+        inline_code = inline_code .. (inline_code ~= '' and ' ' or '')
+    end
+
     local buffer_lines = {}
-    for i, line in ipairs(lines) do
-        buffer_lines[i] = indent .. self.matched_symbol[1] .. ' ' .. line
+    buffer_lines[1] = inline_code .. self.matched_token[1] .. ' ' .. lines[1] -- First line is already appended on `nvim_buf_set_text`
+    for i = 2, #lines do
+        buffer_lines[i] = indent .. self.matched_token[1] .. ' ' .. lines[i]
     end
     return buffer_lines
 end
@@ -305,7 +339,6 @@ end
 -----------------------------------------------------------------------------------------
 
 return {
-    CustomFormatter = CustomFormatter,
     MultiFormatter = MultiFormatter,
     SingleFormatter = SingleFormatter,
 }

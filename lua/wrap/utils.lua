@@ -2,7 +2,7 @@ M = {}
 local temp = require 'utils' -- TODO: Temporary, delete
 local p = temp.pprint
 
----Escape REGEX magic characters
+---Escape regex magic characters
 ---@param str string
 ---@return string str Escaped string
 function M.escape(str)
@@ -98,18 +98,15 @@ function M.find_subarray(array, index, predicate)
     return left, right
 end
 
----Extract comment symbols used for specific
+---Extract comment tokens used for specific
 ---@param node_type string Single-line or multiline comment
 ---@param ft string Filetype string
 ---@param rules Rules Comment parsing rules for supported filetypes
----@return string[][] multi Array of singleline symbols
----@return string[][] single Array of multiline symbols
-function M.get_node_symbols(node_type, ft, rules)
+---@return string[][] multi Array of singleline tokens
+---@return string[][] single Array of multiline tokens
+function M.get_node_tokens(node_type, ft, rules)
     local ft_rules = rules[ft]
-    -- if ft_rules == nil then
-    --     return nil
-    -- end
-    local node_rules = ft_rules.custom[node_type]
+    local node_rules = ft_rules[node_type]
 
     local single, multi = {}, {}
     for _, rule in ipairs(node_rules) do
@@ -122,7 +119,7 @@ function M.get_node_symbols(node_type, ft, rules)
     return multi, single
 end
 
----Extract comment symbols used for specific
+---Extract comment tokens used for specific
 ---@param ft string Filetype string
 ---@param rules Rules parsing rules for supported filetypes
 function M.get_custom_nodes(ft, rules)
@@ -130,7 +127,7 @@ function M.get_custom_nodes(ft, rules)
     if ft_rules == nil then
         return nil
     end
-    return vim.tbl_keys(ft_rules.custom)
+    return vim.tbl_keys(ft_rules)
 end
 
 ---Concatenates non-whitespace-only lines into a single string, separated by spaces.
@@ -150,7 +147,7 @@ function M.concatenate_lines(lines)
 end
 
 -- FIXME: UNUSED
----Strip raw comment lines from comment symbols and concatenate
+---Strip raw comment lines from comment tokens and concatenate
 ---the comment body into a single string
 ---@param lines string[]
 ---@return string com_prefix Character/s denoting a string
@@ -160,11 +157,11 @@ local function concatenate_comment(lines)
     local com_char, com_prefix
     for _, line in ipairs(lines) do
         -- Lua pattern matching does not support backreferences, hence split into 2 matches here
-        -- Find what char is used as comment symbol
+        -- Find what char is used as comment token
         com_char = string.match(line, '^%s*.')
         -- Check if it's not repeated like lua's --- or js's //
         com_prefix = string.match(line, '^%s*(' .. com_char .. '*)')
-        -- Cut comment symbol from the comment
+        -- Cut comment token from the comment
         line = string.gsub(line, '^%s*' .. com_char .. '*%s*', '')
         -- Cut trailing whitespaces
         line = string.gsub(line, '%s*$', '')
@@ -176,19 +173,19 @@ end
 -- FIXME: UNUSED
 ---Parse a comment string to identify whether it's single-line
 ---@param com_text string Comment raw string
----@return 'single'|'multi'|nil comment_type `nil` means text failed to match to a comment using known comment symbols
+---@return 'single'|'multi'|nil comment_type `nil` means text failed to match to a comment using known comment tokens
 ---@return string comment_body
----@return string|string[] comment_symbol Opening character/s denoting a comment
+---@return string|string[] comment_token Opening character/s denoting a comment
 local function infer_singleline(com_text)
-    -- NOTE: Fallback to language-agnostic `prefix_symbol` inferrence if `ft_syntax`
+    -- NOTE: Fallback to language-agnostic `prefix_token` inferrence if `ft_syntax`
     -- is not provided or the function did not return up to this point
     local com_char, com_prefix
     -- Lua pattern matching does not support backreferences, hence split into 2 matches here
-    -- Find what char is used as comment symbol
+    -- Find what char is used as comment token
     com_char = string.match(com_text, '^%s*')
     -- Check if it's not repeated like lua's --- or js's //
     com_prefix = string.match(com_text, '^%s*(' .. com_char .. '*)')
-    -- Cut comment symbol from the comment
+    -- Cut comment token from the comment
     com_text = string.gsub(com_text, '^%s*' .. com_char .. '*%s*', '')
     -- Cut trailing whitespaces
     com_text = string.gsub(com_text, '%s*$', '')

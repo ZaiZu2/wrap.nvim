@@ -1,62 +1,62 @@
----@type Rules
+---Table where each key is a TSNode type, and the value is a list of lists, each containing one or two tokens.
+---@class Rules
+---@field [string] string[][]
 local rules = {
     c = {
-        single = { '//' },
-        multi = { '/*', '*/' },
+        comment = {
+            { '//' },
+            { '/*', '*/' },
+        },
     },
     lua = {
-        single = { '--' },
-        multi = { [[--[[]], ']]' }, -- Escaped with long brackets
+        comment = {
+            { '--' },
+            { [[--[[]], ']]' }, -- Escaped with long brackets
+        },
     },
     python = {
-        -- single = { '#' },
-        -- multi = nil,
-        custom = {
-            string = {
-                { '""""', '""""' },
-                { [[''']], [[''']] },
-            },
-            comment = { { '#' } },
+        string = {
+            { '"""', '"""' },
+            { [[''']], [[''']] },
         },
+        comment = { { '#' } },
     },
     javascript = {
-        -- single = { '//' },
-        -- multi = { '/*', '*/' },
-        custom = {
-            template_string = { { '`', '`' } },
-            comment = {
-                { '//' },
-                { '/*', '*/' },
-            },
-        },
+        template_string = { { '`', '`' } },
+        -- comment = {
+        --     { '//' },
+        --     { '/*', '*/' },
+        -- },
     },
     go = {
-        single = { '//' },
-        multi = { '/*', '*/' },
+        comment = {
+            { '//' },
+            { '/*', '*/' },
+        },
     },
     java = {
-        single = { '//' },
-        multi = { '/*', '*/' },
+        comment = {
+            { '//' },
+            { '/*', '*/' },
+        },
     },
     cpp = {
-        single = { '//' },
-        multi = { '/*', '*/' },
+        comment = {
+            { '//' },
+            { '/*', '*/' },
+        },
     },
     ruby = {
-        single = { '#' },
-        multi = nil,
+        comment = { { '#' } },
     },
     html = {
-        single = nil,
-        multi = { '<!--', '-->' },
+        comment = { { '<!--', '-->' } },
     },
     css = {
-        single = nil,
-        multi = { '/*', '*/' },
+        comment = { { '/*', '*/' } },
     },
     sh = {
-        single = { '#' },
-        multi = nil,
+        comment = { { '#' } },
     },
 }
 
