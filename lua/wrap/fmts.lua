@@ -7,9 +7,9 @@ local utils = require 'wrap.utils'
 local p = temp.pprint
 
 local Formatter = {} -- Inherit from Formatter
-function Formatter:new(filetype)
+function Formatter:new(symbols, filetype)
     self.__index = self -- Provides inheritence
-    local new = { filetype = filetype }
+    local new = { symbols = symbols, matched_symbol = nil, filetype = filetype }
     setmetatable(new, self)
     return new
 end
@@ -73,32 +73,88 @@ function Formatter:isolate_paragraph(com_lines, index)
     return table.move(com_lines, left, right, 1, {}), left, right
 end
 
+function Formatter:merge_paragraph(com_lines, paragraph_lines, left, right)
+    local merged_lines = vim.list_slice(com_lines, 1, left - 1)
+    local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
+    vim.list_extend(merged_lines, paragraph_lines)
+    vim.list_extend(merged_lines, end_slice)
+    return merged_lines
+end
+
 -----------------------------------------------------------------------------------------
 
-local MultiFormatter = {}
-function MultiFormatter:new(filetype)
+local CustomFormatter = {}
+function CustomFormatter:new(symbols, filetype)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local new = Formatter:new(filetype)
+    local new = Formatter:new(symbols, filetype)
     setmetatable(new, self)
-    new.symbols = utils.get_comment_symbol('multi', filetype, rules)
+    return new
+end
+
+function CustomFormatter:parse(text)
+    text = text .. '\n' -- Needed for capturing last line
+    p { text = text }
+    local com_lines = {}
+    for line in text:gmatch '(.-)\n' do -- Match groups separated by \n (split string)
+        local trimmed_line = string.match(line, '^%s*(.-)%s*$')
+        table.insert(com_lines, trimmed_line)
+    end
+    return com_lines
+end
+
+function CustomFormatter:build_buf_lines(lines, col_start)
+    local indent_char, indent_lvl = utils.calculate_indent(col_start)
+    local indent = string.rep(indent_char, indent_lvl)
+
+    local buffer_lines = {}
+    for i, line in ipairs(lines) do
+        local buffer_line, space
+        space = utils.is_whitespace_only(line) and '' or ' ' -- Ternary expr alternative
+        if #lines == 1 then -- If comment spans only 1 line
+            buffer_line = line
+        elseif i == 1 then -- If first line
+            buffer_line = line
+        elseif i == #lines then -- If last line
+            buffer_line = line
+        else -- If a generic line
+            buffer_line = indent .. line
+        end
+        table.insert(buffer_lines, buffer_line)
+    end
+    return buffer_lines
+end
+
+-----------------------------------------------------------------------------------------
+
+local MultiFormatter = {}
+function MultiFormatter:new(symbols, filetype)
+    self.__index = self
+    setmetatable(self, { __index = Formatter })
+
+    local new = Formatter:new(symbols, filetype)
+    setmetatable(new, self)
     return new
 end
 
 function MultiFormatter:parse(text)
     local com_text
-    -- Parse comment content out of a raw string
-    if self.symbols ~= nil then
-        local prefix_rgx = '^%s*' .. utils.escape(self.symbols[1]) -- Match opening symbol
+    for _, symbol in ipairs(self.symbols) do
+        -- Parse comment content out of a raw string
+        local prefix_rgx = '^%s*' .. utils.escape(symbol[1]) -- Match opening symbol
         local body_rgx = '(.*)' -- Match comment content with all whitespaces and newline chars
-        local suffix_rgx = utils.escape(self.symbols[2]) .. '%s*$' -- Match closing symbol
+        local suffix_rgx = utils.escape(symbol[2]) .. '%s*$' -- Match closing symbol
         com_text = string.match(text, prefix_rgx .. body_rgx .. suffix_rgx)
-    else
-        -- TODO: Implement inferred parsing
+        if com_text ~= nil then
+            self.matched_symbol = symbol
+            break
+        end
     end
+    -- TODO: Implement inferred parsing
 
     if com_text == nil then
+        vim.notify(('Failed to match multiline %s comment - `%s`'):format(self.filetype, text))
         error(('Failed to match multiline %s comment - `%s`'):format(self.filetype, text))
     end
 
@@ -112,14 +168,6 @@ function MultiFormatter:parse(text)
     return com_lines
 end
 
-function MultiFormatter:merge_paragraph(com_lines, paragraph_lines, left, right)
-    local merged_lines = vim.list_slice(com_lines, 1, left - 1)
-    local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
-    vim.list_extend(merged_lines, paragraph_lines)
-    vim.list_extend(merged_lines, end_slice)
-    return merged_lines
-end
-
 function MultiFormatter:build_buf_lines(lines, col_start)
     local indent_char, indent_lvl = utils.calculate_indent(col_start)
     local indent = string.rep(indent_char, indent_lvl)
@@ -127,13 +175,19 @@ function MultiFormatter:build_buf_lines(lines, col_start)
     local buffer_lines = {}
     for i, line in ipairs(lines) do
         local buffer_line, space
+        p { matched_symbol = self.matched_symbol }
         space = utils.is_whitespace_only(line) and '' or ' ' -- Ternary expr alternative
         if #lines == 1 then -- If comment spans only 1 line
-            buffer_line = indent .. self.symbols[1] .. space .. line .. space .. self.symbols[2]
+            buffer_line = indent
+                .. self.matched_symbol[1]
+                .. space
+                .. line
+                .. space
+                .. self.matched_symbol[2]
         elseif i == 1 then -- If first line
-            buffer_line = indent .. self.symbols[1] .. space .. line
+            buffer_line = indent .. self.matched_symbol[1] .. space .. line
         elseif i == #lines then -- If last line
-            buffer_line = indent .. line .. space .. self.symbols[2]
+            buffer_line = indent .. line .. space .. self.matched_symbol[2]
         else -- If a generic line
             buffer_line = indent .. line
         end
@@ -145,29 +199,30 @@ end
 -----------------------------------------------------------------------------------------
 
 local SingleFormatter = {}
-function SingleFormatter:new(filetype)
+function SingleFormatter:new(symbols, filetype)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local new = Formatter:new(filetype)
+    local new = Formatter:new(symbols, filetype)
     setmetatable(new, self)
-    new.symbols = utils.get_comment_symbol('single', filetype, rules)
     return new
 end
 
 function SingleFormatter:parse(com_text)
     local com_body
-    if self.symbols ~= nil then
-        -- Some languages have multiple symbols denoting a single-line comment
-        for _, symbol in ipairs(self.symbols) do
-            local prefix_rgx = '^%s*' .. utils.escape(symbol) -- Match opening symbol
-            local body_rgx = '%s*(.-)%s*$' -- Match comment content, but strip all outer whitespaces
-            com_body = string.match(com_text, prefix_rgx .. body_rgx)
+    p {single_symbols = self.symbols}
+    for _, symbol in ipairs(self.symbols) do
+        local prefix_rgx = '^%s*' .. utils.escape(symbol[1]) -- Match opening symbol
+        local body_rgx = '%s*(.-)%s*$' -- Match comment content, but strip all outer whitespaces
+        com_body = string.match(com_text, prefix_rgx .. body_rgx)
+
+        if com_body ~= nil then
+            self.matched_symbol = symbol
+            return com_body
         end
-    else
-        -- TODO: Implement inferred parsing
-        -- infer_singleline()
     end
+    -- TODO: Implement inferred parsing
+    -- infer_singleline()
 
     if com_body == nil then
         vim.notify(
@@ -183,7 +238,6 @@ function SingleFormatter:parse(com_text)
             )
         )
     end
-    return com_body
 end
 
 function SingleFormatter:parse_block(com_nodes, bufnr)
@@ -243,7 +297,7 @@ function SingleFormatter:build_buf_lines(lines, col_start)
 
     local buffer_lines = {}
     for i, line in ipairs(lines) do
-        buffer_lines[i] = indent .. self.symbols[1] .. ' ' .. line
+        buffer_lines[i] = indent .. self.matched_symbol[1] .. ' ' .. line
     end
     return buffer_lines
 end
@@ -251,6 +305,7 @@ end
 -----------------------------------------------------------------------------------------
 
 return {
+    CustomFormatter = CustomFormatter,
     MultiFormatter = MultiFormatter,
     SingleFormatter = SingleFormatter,
 }

@@ -34,16 +34,36 @@ function M.is_whitespace_only(str)
     return not not string.match(str, '^%s*$')
 end
 
----Traverse TS tree upwards in search of a closest node of a provided type
----@param node TSNode|nil
----@param type string TSNode type to search for
----@return TSNode|nil
-function M.find_node(node, type)
-    while node ~= nil do
-        if node:type() == type then
-            return node
+---Traverse TS tree inwards first and then outwards in search of a closest node of a provided type
+---@param start_node TSNode
+---@param types string[] Array of TSNode types to search for
+---@param inwards_only boolean? Traverse into children only
+---@return TSNode|nil, string|nil
+function M.find_node(start_node, types, inwards_only)
+    inwards_only = inwards_only or false
+
+    for _, type_ in ipairs(types) do
+        -- -- TODO: Is inwards recursion needed?
+        -- -- Search inward first
+        -- local node = start_node ---@type TSNode?
+        -- while node ~= nil do
+        --     p { looped_in = node:type() }
+        --     if node:type() == type_ then
+        --         return node, type_
+        --     end
+        --     node = node:named_child(1)
+        -- end
+
+        -- Search outward if not found
+        local node = start_node ---@type TSNode?
+        if not inwards_only then
+            while node ~= nil do
+                if node:type() == type_ then
+                    return node, type_
+                end
+                node = node:parent()
+            end
         end
-        node = node:parent()
     end
     return nil
 end
@@ -79,16 +99,38 @@ function M.find_subarray(array, index, predicate)
 end
 
 ---Extract comment symbols used for specific
----@param com_type 'single'|'multi' Single-line or multiline comment
+---@param node_type string Single-line or multiline comment
 ---@param ft string Filetype string
----@param rules table Comment parsing rules for supported filetypes
----@return string[]|nil symbols Array of symbols if available
-function M.get_comment_symbol(com_type, ft, rules)
+---@param rules Rules Comment parsing rules for supported filetypes
+---@return string[][] multi Array of singleline symbols
+---@return string[][] single Array of multiline symbols
+function M.get_node_symbols(node_type, ft, rules)
+    local ft_rules = rules[ft]
+    -- if ft_rules == nil then
+    --     return nil
+    -- end
+    local node_rules = ft_rules.custom[node_type]
+
+    local single, multi = {}, {}
+    for _, rule in ipairs(node_rules) do
+        if #rule == 2 then
+            table.insert(multi, rule)
+        else
+            table.insert(single, rule)
+        end
+    end
+    return multi, single
+end
+
+---Extract comment symbols used for specific
+---@param ft string Filetype string
+---@param rules Rules parsing rules for supported filetypes
+function M.get_custom_nodes(ft, rules)
     local ft_rules = rules[ft]
     if ft_rules == nil then
         return nil
     end
-    return ft_rules[com_type]
+    return vim.tbl_keys(ft_rules.custom)
 end
 
 ---Concatenates non-whitespace-only lines into a single string, separated by spaces.

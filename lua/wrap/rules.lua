@@ -1,3 +1,4 @@
+---@type Rules
 local rules = {
     c = {
         single = { '//' },
@@ -5,15 +6,29 @@ local rules = {
     },
     lua = {
         single = { '--' },
-        multi = { [[--[[]], ']]' },
+        multi = { [[--[[]], ']]' }, -- Escaped with long brackets
     },
     python = {
-        single = { '#' },
-        multi = nil,
+        -- single = { '#' },
+        -- multi = nil,
+        custom = {
+            string = {
+                { '""""', '""""' },
+                { [[''']], [[''']] },
+            },
+            comment = { { '#' } },
+        },
     },
     javascript = {
-        single = { '//' },
-        multi = { '/*', '*/' },
+        -- single = { '//' },
+        -- multi = { '/*', '*/' },
+        custom = {
+            template_string = { { '`', '`' } },
+            comment = {
+                { '//' },
+                { '/*', '*/' },
+            },
+        },
     },
     go = {
         single = { '//' },
