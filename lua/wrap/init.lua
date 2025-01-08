@@ -2,6 +2,7 @@
 -- TODO: Recognize strings comments and allow for their formatting (python)
 -- TODO: Add indentation level based on currently pointed line
 -- TODO: Add visual mode formatting?
+-- TODO: Correct number of whitespaces for before inline comment - e.g. python has 2 whitespaces
 -- FIXME: When wrapped line has a word which is shorted than available characters, it will loop endlessly and freeze nvim
 -- FIXME: Multiline inline comments do not wrap correctly when first inline line is selected
 -- x = 15; `Another multi-line comment with
@@ -37,7 +38,7 @@ function M.setup(opts)
 
     -- Runtime check of user-provided config
     local ft_rules = opts.rules
-    if ft_rules ~= nil then
+    if vim.tbl_isempty(ft_rules) then
         for ft, ft_rule in pairs(ft_rules) do
             for node_type, token_groups in pairs(ft_rule) do
                 for _, token_group in ipairs(token_groups) do
