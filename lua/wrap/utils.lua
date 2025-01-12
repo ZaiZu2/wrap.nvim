@@ -1,6 +1,4 @@
 M = {}
-local temp = require 'utils' -- TODO: Temporary, delete
-local p = temp.pprint
 
 ---Escape regex magic characters
 ---@param str string
@@ -122,7 +120,7 @@ end
 ---Extract comment tokens used for specific
 ---@param ft string Filetype string
 ---@param rules Rules parsing rules for supported filetypes
-function M.get_custom_nodes(ft, rules)
+function M.get_ft_rules(ft, rules)
     local ft_rules = rules[ft]
     if ft_rules == nil then
         return nil

@@ -14,22 +14,24 @@
 --         lines for additional styling or indentation.
 --         `
 local fmts = require 'wrap.fmts'
-local temp = require 'utils' -- TODO: Temporary, delete
 local utils = require 'wrap.utils'
 local rules = require 'wrap.rules'
-local p = temp.pprint
 local tr = vim.treesitter
 
 local M = {}
 
 -- Default config
----@class (exact) Config
+---@class (exact) _Config
 ---@field line_width integer
 ---@field rules Rules
 local _config = {
     line_width = 40,
     rules = rules,
 }
+
+---@class (exact) Config
+---@field line_width integer?
+---@field rules Rules?
 
 ---Setup plugin config
 ---@param opts Config
@@ -38,7 +40,7 @@ function M.setup(opts)
 
     -- Runtime check of user-provided config
     local ft_rules = opts.rules
-    if vim.tbl_isempty(ft_rules) then
+    if ft_rules ~= nil and not vim.tbl_isempty(ft_rules) then
         for ft, ft_rule in pairs(ft_rules) do
             for node_type, token_groups in pairs(ft_rule) do
                 for _, token_group in ipairs(token_groups) do
@@ -60,8 +62,24 @@ function M.setup(opts)
             end
         end
     end
-
     _config = vim.tbl_deep_extend('force', _config, opts)
+
+    vim.api.nvim_create_user_command('Wrap', function(us_opts)
+        local farg = us_opts.fargs[1]
+        if farg == 'line' then
+        -- TODO: Implement
+        elseif farg == 'block' then
+            M.wrap(true)
+        elseif farg == 'comment' then
+            M.wrap(false)
+        else
+            vim.notify(
+                ('`Wrap %s` is not a known command. Following are available: line, block, comment'):format(
+                    farg
+                )
+            )
+        end
+    end, { nargs = 1 })
 end
 
 --- @param fmtr MultiFormatter
@@ -85,7 +103,14 @@ local function wrap_multi_paragraph(fmtr, com_lines, lead_wtspcs)
     -- Concatenate buffer lines
     local buffer_lines = fmtr:build_buf_paragraph(com_lines, lead_wtspcs)
     -- Replace buffer lines
-    vim.api.nvim_buf_set_text(fmtr.bufnr, row_start, col_start, row_end, col_end, buffer_lines)
+    vim.api.nvim_buf_set_text(
+        fmtr.bufnr,
+        row_start,
+        col_start,
+        row_end,
+        col_end,
+        buffer_lines
+    )
 end
 
 --- @param fmtr SingleFormatter
@@ -134,7 +159,14 @@ local function wrap_multi_whole(fmtr, com_lines)
     -- Concatenate buffer lines
     local buffer_lines = fmtr:build_buf_whole(wrapped_lines)
     -- Replace buffer lines
-    vim.api.nvim_buf_set_text(fmtr.bufnr, row_start, col_start, row_end, col_end, buffer_lines)
+    vim.api.nvim_buf_set_text(
+        fmtr.bufnr,
+        row_start,
+        col_start,
+        row_end,
+        col_end,
+        buffer_lines
+    )
 end
 
 ---@param fmtr SingleFormatter
@@ -165,39 +197,37 @@ end
 function M.wrap(paragraph_only)
     paragraph_only = paragraph_only or false
 
-    print ''
-    print '-----------------'
     local bufnr = vim.api.nvim_get_current_buf()
     local ft = vim.bo.filetype
     local cur_pos = vim.api.nvim_win_get_cursor(0)
     local cur_y, cur_x = unpack(cur_pos)
     cur_y, cur_x = cur_y - 1, cur_x -- Switch from (1,0) to (0,0) indexing
-    local pointed_node, init_types, init_node, init_type
+    local pointed_node, ft_rules, init_node, init_type
 
     -- Extract the node pointed at with the cursor
-    -- tr.get_parser(bufnr):parse()
+    tr.get_parser(bufnr):parse()
     pointed_node = tr.get_node { bufnr = bufnr, pos = { cur_y, cur_x } }
     if pointed_node == nil then
         vim.notify 'No Treesitter node under the cursor'
         return
     end
-
     -- Read filetype specific parsing rules
-    init_types = utils.get_custom_nodes(ft, _config.rules)
-    if init_types == nil then
+    ft_rules = utils.get_ft_rules(ft, _config.rules)
+    if ft_rules == nil then
         vim.notify('wrap.nvim does not support ' .. ft)
         return
     end
 
     -- Find a relevant node
-    init_node, init_type = utils.find_node(pointed_node, init_types)
+    init_node, init_type = utils.find_node(pointed_node, ft_rules)
     if init_node == nil or init_type == nil then
         vim.notify 'Did not find a node'
         return
     end
 
     local init_text = tr.get_node_text(init_node, bufnr)
-    local multi_tokens, single_tokens = utils.get_node_tokens(init_type, ft, _config.rules)
+    local multi_tokens, single_tokens =
+        utils.get_node_tokens(init_type, ft, _config.rules)
 
     -- Try parsing as a multiline comment
     local multi_fmtr = fmts.MultiFormatter:new {

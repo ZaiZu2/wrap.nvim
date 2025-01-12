@@ -23,10 +23,10 @@ local rules = {
     },
     javascript = {
         template_string = { { '`', '`' } },
-        -- comment = {
-        --     { '//' },
-        --     { '/*', '*/' },
-        -- },
+        comment = {
+            { '//' },
+            { '/*', '*/' },
+        },
     },
     go = {
         comment = {

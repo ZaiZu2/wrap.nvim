@@ -1,7 +1,5 @@
-local temp = require 'utils' -- TODO: Temporary, delete
 local tr = require 'vim.treesitter'
 local utils = require 'wrap.utils'
-local p = temp.pprint
 
 ---@class Formatter
 ---@field tokens table
@@ -146,7 +144,6 @@ function MultiFormatter:parse(text)
     -- TODO: Implement inferred parsing
 
     if com_text == nil then
-        vim.notify(('Failed to match multiline %s comment - `%s`'):format(self.filetype, text))
         error(('Failed to match multiline %s comment - `%s`'):format(self.filetype, text))
     end
 
