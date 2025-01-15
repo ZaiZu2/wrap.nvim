@@ -26,7 +26,6 @@ jobs:
 
       - name: Prepare
         run: |
-          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim ./deps/plenary.nvim
           git clone --depth 1 https://github.com/nvim-treesitter/nvim-treesitter ./deps/nvim-treesitter
           git clone --depth 1 https://github.com/echasnovski/mini.nvim.git ./deps/mini.nvim
 
