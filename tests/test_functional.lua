@@ -63,10 +63,8 @@ local function parse_chunk(chunk)
             goto continue
         end
 
-        if desc == nil then
-            desc = line:match 'DESCRIPTION: (.*)'
-            goto continue
-        else
+        desc = line:match 'DESCRIPTION: (.*)'
+        if desc ~= nil then
             cur_index = i + 1
             break
         end
@@ -80,9 +78,9 @@ local function parse_chunk(chunk)
 
     local blocks = { {}, {} } ---@type [string[], string[]]
     for block_index, block_name in ipairs { 'INPUT', 'OUTPUT' } do
-        local start_index, end_index
+        local start_index, end_index = nil, nil
         for i = cur_index, #chunk do
-            local temp
+            local temp = nil
 
             if start_index == nil then
                 temp = chunk[i]:match(block_name .. ' START')
@@ -91,7 +89,6 @@ local function parse_chunk(chunk)
                 end
                 goto continue
             end
-
             if end_index == nil then
                 temp = chunk[i]:match(block_name .. ' END')
                 if temp ~= nil then
@@ -152,8 +149,6 @@ end
 ---@param case TestCase
 ---@param ft string
 local function setup_buffer(case, ft)
-    -- Set up buffer
-    vim.cmd 'enew'
     local bufnr = vim.api.nvim_get_current_buf()
     vim.bo.filetype = ft
     vim.api.nvim_buf_set_lines(bufnr, 0, 1, true, case.input)
@@ -179,14 +174,15 @@ local expect = MiniTest.expect
 ---Assert that the resulting buffer is the same as expected
 ---@param case TestCase
 local function assert_correct(case)
-    local output = vim.api.nvim_buf_get_lines(0, 0, -1, true)
+    local output = vim.api.nvim_buf_get_lines(0, -1, true)
 
     local expected = case.output
-    expect.equality(#expected, #output)
-    expect.equality(expected, output)
+    expect.equality(#output, #expected)
+    expect.equality(output, expected)
+    -- expect.equality(table.concat(output, '\n'), table.concat(expected, '\n'))
 end
 
-local function setup_ts()
+local function pre_once()
     local test_input_dir = vim.uv.cwd() .. '/tests/inputs/'
     for file_name in vim.fs.dir(test_input_dir, {}) do
         local ft = vim.filetype.match { filename = file_name }
@@ -202,8 +198,23 @@ local function setup_ts()
     require('wrap').setup { line_width = 90 }
 end
 
+local function pre_case()
+    local bufnr = vim.api.nvim_create_buf(true, true)
+    vim.api.nvim_open_win(
+        bufnr,
+        true,
+        { relative = 'editor', row = 5, col = 5, width = 100, height = 60 }
+    )
+end
+
+local function post_case()
+    vim.api.nvim_buf_delete(0, { force = true })
+end
+
 local new_set = MiniTest.new_set
-local T = new_set { hooks = { pre_once = setup_ts } }
+local T = new_set {
+    hooks = { pre_once = pre_once, pre_case = pre_case, post_case = post_case },
+}
 
 local test_input_dir = vim.uv.cwd() .. '/tests/inputs/'
 for file_name in vim.fs.dir(test_input_dir, {}) do
@@ -214,16 +225,15 @@ for file_name in vim.fs.dir(test_input_dir, {}) do
     end
 
     local cases = parse_test_file(file_path)
-    T['functional - ' .. ft] = new_set {
+    T[ft] = new_set {
         parametrize = vim.tbl_map(function(case)
             return { case }
         end, cases),
     }
-    T['functional - ' .. ft]['works'] = function(case)
+    T[ft]['works'] = function(case)
         setup_buffer(case, ft)
         vim.cmd(case.func)
         assert_correct(case)
-        vim.api.nvim_buf_delete(0, { force = true })
     end
 end
 
