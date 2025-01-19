@@ -8,14 +8,14 @@ local utils = require 'wrap.utils'
 ---@field bufnr number
 ---@field init_node TSNode
 ---@field init_node_range [number, number, number, number]
----@field rel_cur_y number|nil
+---@field v_row_end number? Visual selection end row if used
 
 ---@class FormatterOpts
 ---@field tokens table
 ---@field filetype string
 ---@field bufnr number
 ---@field init_node TSNode
----@field cur_y number
+---@field cur_row number
 
 ---@class Formatter
 local Formatter = {}
@@ -74,40 +74,37 @@ function Formatter:wrap(com_text, com_length)
     return wrapped_lines
 end
 
-function Formatter:isolate_paragraph(com_lines, index)
+---Isolate lines separated by whitespace rows (within optional Visual selection)
+---@param com_lines string[] Lines to be isolated
+---@param cur_row number Cursor row position or start row of the optional Visual selection
+---@param rel_v_row_end number? End row of the optional Visual selection
+---@return string[]? block_lines Isolated lines on success, nil on failure
+---@return integer left Start index of the isolated block
+---@return integer right End index of the isolated block
+function Formatter:isolate_block(com_lines, cur_row, rel_v_row_end)
     local left, right
-    -- Find and isolate a paragraph
-    left, right = utils.find_subarray(com_lines, index, function(str)
+    -- Find and isolate a block of lines delimited by whitespace rows
+    left, right = utils.find_subarray(com_lines, cur_row, function(str)
         return not utils.is_whitespace_only(str)
     end)
     if left == -1 then
         return nil
     end
-    return table.move(com_lines, left, right, 1, {}), left, right
-end
 
-function Formatter:merge_paragraph(com_lines, lead_wtspcs, paragraph_lines, left, right)
-    local merged_lines = vim.list_slice(com_lines, 1, left - 1)
-    local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
-    vim.list_extend(merged_lines, paragraph_lines)
-    vim.list_extend(merged_lines, end_slice)
-
-    -- Extend whitespace list to retain correct line to whitespace association
-    local paragraph_wtspcs = {}
-    for _ = 1, #paragraph_lines do
-        table.insert(paragraph_wtspcs, lead_wtspcs[self.rel_cur_y])
+    -- Subset block lines only to these within optional Visual selection
+    if rel_v_row_end ~= nil then
+        left = cur_row > left and cur_row or left
+        right = rel_v_row_end < right and rel_v_row_end or right
     end
-    local merged_wtspcs = vim.list_slice(lead_wtspcs, 1, left - 1)
-    local end_wtsp_slice = vim.list_slice(lead_wtspcs, right + 1, #lead_wtspcs)
-    vim.list_extend(merged_wtspcs, paragraph_wtspcs)
-    vim.list_extend(merged_wtspcs, end_wtsp_slice)
 
-    return merged_lines, merged_wtspcs
+    return table.move(com_lines, left, right, 1, {}), left, right
 end
 
 -----------------------------------------------------------------------------------------
 
 ---@class MultiFormatter:Formatter
+---@field rel_cur_row number
+---@field rel_v_row_end number? Visual selection end row if used
 local MultiFormatter = {}
 
 ---@param opts FormatterOpts
@@ -116,16 +113,21 @@ function MultiFormatter:new(opts)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local obj = Formatter:new()
+    local obj = Formatter:new() ---@cast obj MultiFormatter
     obj.tokens = opts.tokens
     obj.matched_token = nil
     obj.filetype = opts.filetype
     obj.bufnr = opts.bufnr
     obj.init_node = opts.init_node
     obj.init_node_range = { tr.get_node_range(obj.init_node) }
-    obj.rel_cur_y = opts.cur_y - obj.init_node_range[1] + 1
+    obj.rel_cur_row = opts.cur_row - obj.init_node_range[1] + 1
+    if opts.v_row_end ~= nil then
+        obj.rel_v_row_end = opts.v_row_end - obj.init_node_range[1] + 1
+    else
+        obj.rel_v_row_end = nil
+    end
     setmetatable(obj, self)
-    return obj ---@type MultiFormatter
+    return obj
 end
 
 function MultiFormatter:parse(text)
@@ -159,6 +161,25 @@ function MultiFormatter:parse(text)
     return com_lines, lead_wtspcs
 end
 
+function MultiFormatter:merge_block(com_lines, lead_wtspcs, block_lines, left, right)
+    local merged_lines = vim.list_slice(com_lines, 1, left - 1)
+    local end_slice = vim.list_slice(com_lines, right + 1, #com_lines)
+    vim.list_extend(merged_lines, block_lines)
+    vim.list_extend(merged_lines, end_slice)
+
+    -- Extend whitespace list to retain correct line to whitespace association
+    local block_wtspcs = {}
+    for _ = 1, #block_lines do
+        table.insert(block_wtspcs, lead_wtspcs[self.rel_cur_row])
+    end
+    local merged_wtspcs = vim.list_slice(lead_wtspcs, 1, left - 1)
+    local end_wtsp_slice = vim.list_slice(lead_wtspcs, right + 1, #lead_wtspcs)
+    vim.list_extend(merged_wtspcs, block_wtspcs)
+    vim.list_extend(merged_wtspcs, end_wtsp_slice)
+
+    return merged_lines, merged_wtspcs
+end
+
 function MultiFormatter:build_buf_whole(lines)
     local indent_char, indent_lvl = utils.calculate_indent(self.init_node_range[2])
     local indent = string.rep(indent_char, indent_lvl)
@@ -180,7 +201,7 @@ function MultiFormatter:build_buf_whole(lines)
     return buffer_lines
 end
 
-function MultiFormatter:build_buf_paragraph(lines, lead_wtspcs)
+function MultiFormatter:build_buf_block(lines, lead_wtspcs)
     local buffer_lines = {}
     for i, line in ipairs(lines) do
         local buffer_line
@@ -201,7 +222,7 @@ end
 -----------------------------------------------------------------------------------------
 
 ---@class SingleFormatter:Formatter
----@field cur_y number
+---@field cur_row number
 local SingleFormatter = {}
 
 --- @param opts FormatterOpts
@@ -210,16 +231,16 @@ function SingleFormatter:new(opts)
     self.__index = self
     setmetatable(self, { __index = Formatter })
 
-    local obj = Formatter:new()
+    local obj = Formatter:new() ---@cast obj SingleFormatter
     obj.tokens = opts.tokens
     obj.matched_token = nil
     obj.filetype = opts.filetype
     obj.bufnr = opts.bufnr
     obj.init_node = opts.init_node
     obj.init_node_range = { tr.get_node_range(obj.init_node) }
-    obj.cur_y = opts.cur_y
+    obj.cur_row = opts.cur_row
     setmetatable(obj, self)
-    return obj ---@type SingleFormatter
+    return obj
 end
 
 function SingleFormatter:parse(com_text)
@@ -238,12 +259,6 @@ function SingleFormatter:parse(com_text)
     -- infer_singleline()
 
     if com_body == nil then
-        vim.notify(
-            ('Failed to parse one of the single-line %s comments - `%s`'):format(
-                self.filetype,
-                com_text
-            )
-        )
         error(
             ('Failed to parse one of the single-line %s comments - `%s`'):format(
                 self.filetype,
@@ -314,7 +329,14 @@ function SingleFormatter:build_buf_lines(lines, start_node)
     local indent_char, indent_lvl = utils.calculate_indent(new_col_start)
     local indent = string.rep(indent_char, indent_lvl)
 
-    local start_line = vim.api.nvim_buf_get_text(self.bufnr, first_row_start, 0, first_row_start, first_col_start, {})[1]
+    local start_line = vim.api.nvim_buf_get_text(
+        self.bufnr,
+        first_row_start,
+        0,
+        first_row_start,
+        first_col_start,
+        {}
+    )[1]
     -- Calculate the final offset of the first comment line in reference to potential code
     local col_start_diff = new_col_start - first_col_start
     local inline_code

@@ -3,6 +3,8 @@
 -- TODO: Add indentation level based on currently pointed line
 -- TODO: Add visual mode formatting?
 -- TODO: Correct number of whitespaces for before inline comment - e.g. python has 2 whitespaces
+-- FIXME: Adjacent Multiline and Singleline comments will probably get merged together when wrapping a block
+-- Implement guard against adding multiline comments when searching for adjacent nodes in singleline comment
 -- FIXME: When wrapped line has a word which is shorted than available characters, it will loop endlessly and freeze nvim
 -- FIXME: Multiline inline comments do not wrap correctly when first inline line is selected
 -- x = 15; `Another multi-line comment with
@@ -20,10 +22,7 @@ local tr = vim.treesitter
 
 local M = {}
 
--- Default config
----@class (exact) _Config
----@field line_width integer
----@field rules Rules
+-- Default config -@class (exact) _Config -@field line_width integer -@field rules Rules
 local _config = {
     line_width = 40,
     rules = rules,
@@ -51,7 +50,7 @@ function M.setup(opts)
                     for _, token in ipairs(token_group) do
                         assert(
                             type(token) == 'string',
-                            ('Token %s (specified for %s:%s) must be a string!'):format(
+                            ('Token `%s` (specified for %s:%s) must be a string!'):format(
                                 token,
                                 ft,
                                 node_type
@@ -66,17 +65,16 @@ function M.setup(opts)
 
     vim.api.nvim_create_user_command('Wrap', function(us_opts)
         local farg = us_opts.fargs[1]
-        if farg == 'line' then
-        -- TODO: Implement
-        elseif farg == 'block' then
-            M.wrap(true)
+        if farg == 'block' then
+            M.wrap { block_only = true }
         elseif farg == 'comment' then
-            M.wrap(false)
+            M.wrap { block_only = false }
         else
             vim.notify(
-                ('`Wrap %s` is not a known command. Following are available: line, block, comment'):format(
+                ('[wrap.nvim] `Wrap %s` is not a known command. Following subcommands are available: block, comment'):format(
                     farg
-                )
+                ),
+                vim.log.levels.ERROR
             )
         end
     end, { nargs = 1 })
@@ -85,23 +83,29 @@ end
 --- @param fmtr MultiFormatter
 --- @param com_lines string[]
 --- @param lead_wtspcs string[]
-local function wrap_multi_paragraph(fmtr, com_lines, lead_wtspcs)
+local function wrap_multi_block(fmtr, com_lines, lead_wtspcs)
     local row_start, col_start, row_end, col_end = unpack(fmtr.init_node_range)
-    -- Extract paragraph pointed by the cursor
-    local paragraph_lines, left, right = fmtr:isolate_paragraph(com_lines, fmtr.rel_cur_y)
-    if paragraph_lines == nil then
-        vim.notify 'Selected line consists only of whitespaces'
+    -- Extract block pointed at by the cursor (or visual selection)
+    vim.print(fmtr.rel_cur_row, fmtr.rel_v_row_end)
+    local block_lines, left, right =
+        fmtr:isolate_block(com_lines, fmtr.rel_cur_row, fmtr.rel_v_row_end)
+    vim.print(com_lines, block_lines, left, right)
+    if block_lines == nil then
+        vim.notify(
+            '[wrap.nvim] Selected line consists only of whitespaces',
+            vim.log.levels.WARN
+        )
         return
     end
-    -- Rewrap (reformat) the paragraph
-    local paragraph_text = utils.concatenate_lines(paragraph_lines)
-    local com_length = _config.line_width - #lead_wtspcs[fmtr.rel_cur_y]
-    local wrapped_lines = fmtr:wrap(paragraph_text, com_length)
-    -- Merge the paragraph into original comment lines
+    -- Rewrap (reformat) the block
+    local block_text = utils.concatenate_lines(block_lines)
+    local com_length = _config.line_width - #lead_wtspcs[fmtr.rel_cur_row]
+    local wrapped_lines = fmtr:wrap(block_text, com_length)
+    -- Merge the block into original comment lines
     com_lines, lead_wtspcs =
-        fmtr:merge_paragraph(com_lines, lead_wtspcs, wrapped_lines, left, right)
+        fmtr:merge_block(com_lines, lead_wtspcs, wrapped_lines, left, right)
     -- Concatenate buffer lines
-    local buffer_lines = fmtr:build_buf_paragraph(com_lines, lead_wtspcs)
+    local buffer_lines = fmtr:build_buf_block(com_lines, lead_wtspcs)
     -- Replace buffer lines
     vim.api.nvim_buf_set_text(
         fmtr.bufnr,
@@ -114,43 +118,50 @@ local function wrap_multi_paragraph(fmtr, com_lines, lead_wtspcs)
 end
 
 --- @param fmtr SingleFormatter
-local function wrap_single_paragraph(fmtr)
-    local _, col_start, _, _ = unpack(fmtr.init_node_range)
+local function wrap_single_block(fmtr)
     -- Find all row-adjacent comment nodes
     local com_nodes = fmtr:find_adjacent_nodes(fmtr.init_node)
     -- Parse all found nodes
     local com_lines = fmtr:parse_block(com_nodes)
-    -- Extract paragraph pointed by the cursor
-    local rel_cur_y = fmtr.cur_y - tr.get_node_range(com_nodes[1]) + 1
-    local paragraph_lines, left, right = fmtr:isolate_paragraph(com_lines, rel_cur_y)
-    if paragraph_lines == nil then
-        vim.notify 'Selected line consists only of whitespaces'
+    -- Extract block pointed by the cursor
+    local rel_cur_row = fmtr.cur_row - tr.get_node_range(com_nodes[1]) + 1
+    -- TODO: Implement Visual selection
+    -- local rel_v_row_end
+    -- if v_row_end ~= nil then
+    --     rel_v_row_end = v_row_end - tr.get_node_range(com_nodes[1]) + 1
+    -- end
+    local block_lines, left, right = fmtr:isolate_block(com_lines, rel_cur_row)
+    if block_lines == nil then
+        vim.notify(
+            '[wrap.nvim] Selected line consists only of whitespaces',
+            vim.log.levels.WARN
+        )
         return
     end
-    -- Rewrap (reformat) the paragraph
-    local com_text = utils.concatenate_lines(paragraph_lines)
+    -- Rewrap (reformat) the block
+    local com_text = utils.concatenate_lines(block_lines)
     local com_length = _config.line_width - fmtr.init_node_range[2]
     local wrapped_lines = fmtr:wrap(com_text, com_length)
     -- Concatenate buffer lines
     local buffer_lines = fmtr:build_buf_lines(wrapped_lines, com_nodes[left])
     -- Replace buffer lines
-    local paragraph_row_start, _, _, _ = tr.get_node_range(com_nodes[left])
-    local _, _, paragraph_row_end, paragraph_col_end = tr.get_node_range(com_nodes[right])
+    local block_row_start, _, _, _ = tr.get_node_range(com_nodes[left])
+    local _, _, block_row_end, block_col_end = tr.get_node_range(com_nodes[right])
     vim.api.nvim_buf_set_text(
         fmtr.bufnr,
-        paragraph_row_start,
+        block_row_start,
         0,
-        paragraph_row_end,
-        paragraph_col_end,
+        block_row_end,
+        block_col_end,
         buffer_lines
     )
 end
 
 ---@param fmtr MultiFormatter
 ---@param com_lines string[]
-local function wrap_multi_whole(fmtr, com_lines)
+local function wrap_multi_comment(fmtr, com_lines)
     local row_start, col_start, row_end, col_end = unpack(fmtr.init_node_range)
-    -- Rewrap (reformat) the paragraph
+    -- Rewrap (reformat) the block
     local com_text = utils.concatenate_lines(com_lines)
     local com_length = _config.line_width - col_start
     local wrapped_lines = fmtr:wrap(com_text, com_length)
@@ -170,13 +181,13 @@ local function wrap_multi_whole(fmtr, com_lines)
 end
 
 ---@param fmtr SingleFormatter
-local function wrap_single_whole(fmtr)
+local function wrap_single_comment(fmtr)
     -- Find all row-adjacent comment nodes
     local com_nodes = fmtr:find_adjacent_nodes(fmtr.init_node)
     -- Parse all found nodes
     local com_lines = fmtr:parse_block(com_nodes)
     local block_row_start, block_col_start, _, _ = tr.get_node_range(com_nodes[1])
-    -- Rewrap (reformat) the paragraph
+    -- Rewrap (reformat) the block
     local com_text = utils.concatenate_lines(com_lines)
     local com_length = _config.line_width - block_col_start
     local wrapped_lines = fmtr:wrap(com_text, com_length)
@@ -194,34 +205,61 @@ local function wrap_single_whole(fmtr)
     )
 end
 
-function M.wrap(paragraph_only)
-    paragraph_only = paragraph_only or false
+---Wrap text in the node
+---@param opts { block_only: boolean }
+function M.wrap(opts)
+    local block_only = opts.block_only
+
+    local is_visual = vim.list_contains({ 'v', 'V', 'CTRL-V' }, vim.fn.mode())
+    if not block_only and is_visual then
+        vim.notify(
+            '[wrap.nvim] Use `Wrap block` when in Visual mode',
+            vim.log.levels.WARN
+        )
+        return
+    end
+
+    local cur_row, cur_col, v_row_end, v_col_end
+    if is_visual then
+        cur_row, cur_col = unpack(vim.fn.getpos 'v', 2, 3)
+        v_row_end, v_col_end = unpack(vim.fn.getpos '.', 2, 3)
+
+        -- If Visual selection was done from bottom up, swap start with end positions
+        if v_row_end < cur_row or (v_row_end == cur_row and v_col_end < cur_col) then
+            local temp_row, temp_col = cur_row, cur_col
+            cur_row, cur_col = v_row_end, v_col_end
+            v_row_end, v_col_end = temp_row, temp_col
+        end
+
+        -- Switch from (1,1) to (0,0) indexing
+        cur_row, cur_col = cur_row - 1, cur_col - 1
+        v_row_end, v_col_end = v_row_end - 1, v_col_end - 1
+    else
+        cur_row, cur_col = unpack(vim.fn.getpos '.', 2, 3)
+        cur_row, cur_col = cur_row - 1, cur_col - 1 -- Switch from (0,1) to (0,0) indexing
+    end
 
     local bufnr = vim.api.nvim_get_current_buf()
     local ft = vim.bo.filetype
-    local cur_pos = vim.api.nvim_win_get_cursor(0)
-    local cur_y, cur_x = unpack(cur_pos)
-    cur_y, cur_x = cur_y - 1, cur_x -- Switch from (1,0) to (0,0) indexing
     local pointed_node, ft_rules, init_node, init_type
 
     -- Extract the node pointed at with the cursor
     tr.get_parser(bufnr):parse()
-    pointed_node = tr.get_node { bufnr = bufnr, pos = { cur_y, cur_x } }
+    pointed_node = tr.get_node { bufnr = bufnr, pos = { cur_row, cur_col } }
     if pointed_node == nil then
-        vim.notify 'No Treesitter node under the cursor'
+        vim.notify('[wrap.nvim] No Treesitter node under the cursor', vim.log.levels.WARN)
         return
     end
     -- Read filetype specific parsing rules
     ft_rules = utils.get_ft_rules(ft, _config.rules)
     if ft_rules == nil then
-        vim.notify('wrap.nvim does not support ' .. ft)
+        vim.notify('[wrap.nvim] wrap.nvim does not support ' .. ft, vim.log.levels.WARN)
         return
     end
-
     -- Find a relevant node
     init_node, init_type = utils.find_node(pointed_node, ft_rules)
     if init_node == nil or init_type == nil then
-        vim.notify 'Did not find a node'
+        vim.notify('[wrap.nvim] Did not find a wrappable node', vim.log.levels.WARN)
         return
     end
 
@@ -234,15 +272,16 @@ function M.wrap(paragraph_only)
         tokens = multi_tokens,
         filetype = ft,
         init_node = init_node,
-        cur_y = cur_y,
+        cur_row = cur_row,
         bufnr = bufnr,
+        v_row_end = v_row_end,
     }
     local success, com_lines, lead_wtspcs = pcall(multi_fmtr.parse, multi_fmtr, init_text)
     if success then
-        if paragraph_only then
-            wrap_multi_paragraph(multi_fmtr, com_lines, lead_wtspcs)
+        if block_only then
+            wrap_multi_block(multi_fmtr, com_lines, lead_wtspcs)
         else
-            wrap_multi_whole(multi_fmtr, com_lines)
+            wrap_multi_comment(multi_fmtr, com_lines)
         end
         return
     end
@@ -252,13 +291,13 @@ function M.wrap(paragraph_only)
         tokens = single_tokens,
         filetype = ft,
         init_node = init_node,
-        cur_y = cur_y,
+        cur_row = cur_row,
         bufnr = bufnr,
     }
-    if paragraph_only then
-        wrap_single_paragraph(single_fmtr)
+    if block_only then
+        wrap_single_block(single_fmtr)
     else
-        wrap_single_whole(single_fmtr)
+        wrap_single_comment(single_fmtr)
     end
 end
 

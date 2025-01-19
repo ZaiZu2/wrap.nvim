@@ -174,7 +174,7 @@ local expect = MiniTest.expect
 ---Assert that the resulting buffer is the same as expected
 ---@param case TestCase
 local function assert_correct(case)
-    local output = vim.api.nvim_buf_get_lines(0, -1, true)
+    local output = vim.api.nvim_buf_get_lines(0, 0, -1, true)
 
     local expected = case.output
     expect.equality(#output, #expected)
@@ -211,6 +211,7 @@ local function post_case()
     vim.api.nvim_buf_delete(0, { force = true })
 end
 
+local MiniTest = require'mini.test'
 local new_set = MiniTest.new_set
 local T = new_set {
     hooks = { pre_once = pre_once, pre_case = pre_case, post_case = post_case },
